@@ -27,6 +27,14 @@ library
                     ,  transformers
                     ,  mtl
                     ,  base16-bytestring
+                    ,  free
+                    ,  containers
+                    ,  stm
+                    ,  aeson
+                    ,  servant-server
+                    ,  hedis
+                    ,  wai
+                    ,  warp
                     ,  amazonka
                     ,  unordered-containers
                     ,  amazonka-dynamodb
