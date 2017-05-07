@@ -2,7 +2,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
-module Patricia where
+module Blockchain.Patricia where
 
 import Prelude hiding (lookup)
 import Data.Maybe

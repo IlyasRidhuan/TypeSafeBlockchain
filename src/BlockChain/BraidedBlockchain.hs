@@ -4,12 +4,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveGeneric #-}
 
-module BraidedBlockchain where
+module Blockchain.BraidedBlockchain where
 
 import Crypto.Hash
 import Data.List
-import GenAddress
-import Patricia
+import Blockchain.GenAddress
+import Blockchain.Patricia
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as B8

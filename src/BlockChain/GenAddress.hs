@@ -1,6 +1,6 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving #-}
-module GenAddress where
+module Blockchain.GenAddress where
 
 import Crypto.PubKey.ECC.Types
 import Crypto.PubKey.ECC.Generate
