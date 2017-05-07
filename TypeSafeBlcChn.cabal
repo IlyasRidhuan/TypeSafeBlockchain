@@ -21,6 +21,12 @@ library
                     ,  conduit
                     ,  bytestring
                     ,  lens
+                    ,  cryptonite
+                    ,  binary
+                    ,  memory
+                    ,  transformers
+                    ,  mtl
+                    ,  base16-bytestring
                     ,  amazonka
                     ,  unordered-containers
                     ,  amazonka-dynamodb
