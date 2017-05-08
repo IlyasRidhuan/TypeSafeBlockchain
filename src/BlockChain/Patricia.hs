@@ -20,8 +20,9 @@ import qualified Data.ByteString.Char8 as B8 (pack)
 newtype Key a = Key [a] deriving (Generic,Show,Eq,Ord)
 instance Binary a => Binary (Key a)
 
-data PatriciaTree a = Empty| Root Hash [PatriciaTree a] | Node (Key a) (Value a) [PatriciaTree a] deriving (Generic,Show,Eq,Ord)
-instance Binary a => Binary (PatriciaTree a)
+data PatriciaTree k v = Empty| Root Hash [PatriciaTree k v]
+                        | Node (Key k) (Value v) [PatriciaTree k v] deriving (Generic,Show,Eq,Ord)
+instance (Binary k, Binary v) => Binary (PatriciaTree k v)
 
 type Hash = Digest SHA256
 instance Binary Hash where
@@ -39,26 +40,26 @@ instance Binary Hash where
 data Value a = Ptr Hash | Value [a] deriving (Show, Eq,Ord,Generic)
 instance Binary a => Binary (Value a)
 
-type Breadcrumbs a = [Crumb a]
-data Crumb a = LeftCrumb [a] Hash | RightCrumb [a] Hash deriving (Show)
-type Focus a = (PatriciaTree a, Breadcrumbs a)
+-- type Breadcrumbs a = [Crumb a]
+-- data Crumb a = LeftCrumb [a] Hash | RightCrumb [a] Hash deriving (Show)
+-- type Focus k v = (PatriciaTree k v, Breadcrumbs a)
 
 data Prefix a = FullPrefix [a] | PartialPrefix [a] deriving (Show)
 
-hashNode :: [PatriciaTree Char] -> Hash
+hashNode :: (Show k, Show v) => [PatriciaTree k v] -> Hash
 hashNode [] = hash ("" :: ByteString)
 -- hashNode [Val x (Key y) _] = hash (B8.pack x <> B8.pack y)
 hashNode xs = hash $ foldr (><) ("" :: ByteString) xs
 
-(><) :: PatriciaTree Char -> ByteString -> ByteString
-Node (Key x) (Ptr y) _ >< str = B8.pack x <> B8.pack (show y) <> str
-Node (Key x) (Value y) _ >< str = B8.pack x <> B8.pack y <> str
+(><) :: (Show k, Show v) => PatriciaTree k v -> ByteString -> ByteString
+Node (Key x) (Ptr y) _ >< str = B8.pack (show x) <> B8.pack (show y) <> str
+Node (Key x) (Value y) _ >< str = B8.pack (show x) <> B8.pack (show y) <> str
 
 
-singleton :: PatriciaTree a
+singleton :: PatriciaTree k v
 singleton = Root (hash ("0"::ByteString)) [Empty]
 
-insertPatriciaTree :: PatriciaTree Char -> String -> String -> PatriciaTree Char
+insertPatriciaTree :: (Eq k, Eq v, Show k, Show v)=> PatriciaTree k v -> [k] -> [v] -> PatriciaTree k v
 insertPatriciaTree (Root h [Empty]) key value = Root h [Node (Key key) (Value value) [Empty]]
 insertPatriciaTree (Root h trees) key value = case prefixMap trees key of
     [(pt,Just (FullPrefix s))] ->
@@ -78,7 +79,7 @@ insertPatriciaTree (Node (Key n) k trees) key value = case prefixMap trees key o
 
     _ -> Node (Key n) k $ Node (Key key) (Value value) [Empty] : trees
 
-reHashTree :: PatriciaTree Char -> PatriciaTree Char
+reHashTree :: (Show k, Show v,Ord v,Ord k) => PatriciaTree k v -> PatriciaTree k v
 reHashTree leaf@(Root h [Empty]) = leaf
 reHashTree leaf@(Node (Key n) k [Empty]) = leaf
 reHashTree (Root h trees) = Root (hashNode newTree) newTree
@@ -89,7 +90,11 @@ reHashTree (Node (Key n) k trees) = Node (Key n) (Ptr $ hashNode newTree) newTre
     where
         newTree = reHashTree <$> sort trees
 
-getValue :: Eq a => (PatriciaTree a, [Hash]) -> [a] -> (PatriciaTree a, [Hash])
+getRoot :: PatriciaTree k v -> Maybe Hash
+getRoot (Root h _) = Just h
+getRoot _          = Nothing
+
+getValue :: (Eq k, Eq v) => (PatriciaTree k v, [Hash]) -> [k] -> (PatriciaTree k v, [Hash])
 getValue node [] = node
 getValue (Root h trees,bs) key = case prefixMap trees key of
     [(pt, Just (FullPrefix s))] -> getValue (pt,h:bs) $ drop (length s) key
@@ -100,7 +105,7 @@ getValue (Node (Key n) (Ptr k) trees,bs) key = case prefixMap trees key of
     [(pt, Just (PartialPrefix s))] -> getValue (pt,k:bs) $ drop (length s) key
     _                       -> (Empty, [])
 
-update :: Eq a => ([a] -> [a]) -> [a] -> PatriciaTree a -> PatriciaTree a
+update :: (Eq k, Eq v) => ([v] -> [v]) -> [k] -> PatriciaTree k v -> PatriciaTree k v
 update f [] root@(Root h ts) = root
 update f [] (Node (Key v) (Value k) ts) = Node (Key v) (Value $ f k) ts
 update f key (Root h trees) = case prefixMap trees key of
@@ -120,7 +125,7 @@ update f key (Node (Key v) k trees) = case prefixMap trees key of
 
     _                       -> Empty
 
-prefixMap :: (Eq a) => [PatriciaTree a] -> [a] -> [(PatriciaTree a, Maybe(Prefix a))]
+prefixMap :: (Eq k, Eq v) => [PatriciaTree k v] -> [k] -> [(PatriciaTree k v, Maybe(Prefix k))]
 prefixMap trees str = filter (isJust . snd ) $ (\x -> (x,findPrefix x str)) <$> trees
 
 slowPrefix :: (Eq a) => [a] -> [a] -> [a]
@@ -131,7 +136,7 @@ slowPrefix (x:xs) (y:ys)
     | otherwise = []
 
 
-findPrefix :: Eq a => PatriciaTree a -> [a] -> Maybe (Prefix a)
+findPrefix :: (Eq k, Eq v) => PatriciaTree k v -> [k] -> Maybe (Prefix k)
 findPrefix (Node (Key n) _ _) str
     | pfx == n = Just $ FullPrefix pfx
     | null pfx = Nothing
