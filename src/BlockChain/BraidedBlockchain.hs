@@ -110,15 +110,22 @@ getChainTip = do
     tipNumber <- (MaybeT . return ) $ ((res ^. girsItem) ! "BlockNumber") ^. avS
     let getBlockTip = Map.singleton "ID" (attributeValue & avS .~ Just tipNumber)
     blockRes <- liftIO $ getEntry NorthVirginia "ChainData" getBlockTip
-    blockData <- (MaybeT . return ) $ ((res ^. girsItem) ! "BlockData") ^. avB
+    blockData <- (MaybeT . return ) $ ((blockRes ^. girsItem) ! "BlockData") ^. avB
     return $ decode $ fromStrict blockData
 
-seedChainData :: IO PutItemResponse
-seedChainData = do
+seedBlockchain :: IO PutItemResponse
+seedBlockchain = do
     let genesisBlock = toStrict $ encode genesisBead
-    let zerothBlock = insert "ID" (attributeValue & avS .~ Just "0") $ insert "BlockData" (attributeValue & avB .~ Just genesisBlock) Map.empty
-    insertItem NorthVirginia "ChainData" zerothBlock
+    let zerothBlock = insert "BlockNumber" (attributeValue & avS .~ Just "0") $ insert "BlockData" (attributeValue & avB .~ Just genesisBlock) Map.empty
+    insertItem NorthVirginia "BlockChain" zerothBlock
 
+seedChainData :: MaybeT IO [Hash]
+seedChainData = do
+    entries <- liftIO $ scanTable NorthVirginia "StateData" "attribute_exists(TreeData)"
+    entriesList <- (MaybeT . return ) $ traverse (\x -> x ! "TreeData" ^. avB) (entries ^. srsItems)
+    trees <- (MaybeT . return ) $ traverse (decode . fromStrict) entriesList :: MaybeT IO [PatriciaTree Char Char]
+    (MaybeT . return ) $ traverse getRoot trees
+    -- return $ foldr (\x -> flip ( `insertPatriciaTree` fst x) (snd x)) singleton entriesList
 seedStateData :: MaybeT IO PutItemResponse
 seedStateData =  do
     entries <- liftIO $ scanTable NorthVirginia "Music" "attribute_exists(Address)"
@@ -127,7 +134,7 @@ seedStateData =  do
     let encodedTree = toStrict $ encode pTree
     root <- (MaybeT . return ) $ getRoot pTree
     let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show root)) $ insert "TreeData" (attributeValue & avB .~ Just encodedTree) Map.empty
-    liftIO $ insertItem NorthVirginia "MusicStateDB" seedTree
+    liftIO $ insertItem NorthVirginia "StateData" seedTree
 
 listify :: [HashMap Text AttributeValue]  -> Maybe [(String,String)]
 listify = traverse (\x -> do
