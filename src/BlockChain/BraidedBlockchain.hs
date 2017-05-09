@@ -7,7 +7,7 @@
 module Blockchain.BraidedBlockchain where
 
 import Crypto.Hash
-import Data.List (zipWith5)
+import Data.List (zipWith5,maximumBy)
 import Blockchain.GenAddress
 import Blockchain.Patricia
 import Control.Monad
@@ -23,6 +23,7 @@ import Control.Monad.Trans.Maybe
 import           Network.AWS.DynamoDB
 import Control.Lens
 import GHC.Generics
+import Data.Ord (comparing)
 import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict,fromStrict)
@@ -96,22 +97,22 @@ decodeMessage res = do
 --     serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "Content") ^. avB
 --     return $ decode $ fromStrict serialBinaryTree
 --
--- getBlockchainTree:: Binary a => Hash -> Tx -> MaybeT IO (PatriciaTree Text Hash)
--- getBlockchainTree hash Tx {..} = do
---     let treeRoot = Map.singleton "Hash" (attributeValue & avS .~ (Just $ Data.Text.pack $ show hash))
---     res <- liftIO $ getEntry NorthVirginia "ChainData" treeRoot
---     serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "Content") ^. avB
---     return $ decode $ fromStrict serialBinaryTree
+getBlockchainTree:: Bead -> MaybeT IO (PatriciaTree Char Char)
+getBlockchainTree Bead {..} = do
+    let treeRoot = Map.singleton "Hash" (attributeValue & avS .~ (Just $ Data.Text.pack $ show patriciaRoot))
+    res <- liftIO $ getEntry NorthVirginia "ChainData" treeRoot
+    serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "TreeData") ^. avB
+    return $ decode $ fromStrict serialBinaryTree
 
 getChainTip :: MaybeT IO Bead
 getChainTip = do
-    let chainTip = Map.singleton "ID" (attributeValue & avS .~ (Just $ Data.Text.pack "ChainTip"))
-    res <- liftIO $ getEntry NorthVirginia "ChainData" chainTip
-    tipNumber <- (MaybeT . return ) $ ((res ^. girsItem) ! "BlockNumber") ^. avS
-    let getBlockTip = Map.singleton "ID" (attributeValue & avS .~ Just tipNumber)
-    blockRes <- liftIO $ getEntry NorthVirginia "ChainData" getBlockTip
-    blockData <- (MaybeT . return ) $ ((blockRes ^. girsItem) ! "BlockData") ^. avB
-    return $ decode $ fromStrict blockData
+    blocks <- liftIO $ scanTable NorthVirginia "BlockChain" "attribute_exists(BlockData)"
+    blockNumber <- (MaybeT . return ) $ traverse (\x -> x ! "BlockNumber" ^. avS) (blocks ^. srsItems)
+    blockData <- (MaybeT . return ) $ traverse (\x -> x ! "BlockData" ^. avB) (blocks ^. srsItems)
+    let listedVersion = zip blockNumber blockData
+    let (num,tipData) = maximumBy (comparing fst) listedVersion
+    return $ decode $ fromStrict tipData
+
 
 seedBlockchain :: IO PutItemResponse
 seedBlockchain = do
@@ -119,21 +120,30 @@ seedBlockchain = do
     let zerothBlock = insert "BlockNumber" (attributeValue & avS .~ Just "0") $ insert "BlockData" (attributeValue & avB .~ Just genesisBlock) Map.empty
     insertItem NorthVirginia "BlockChain" zerothBlock
 
-seedChainData :: MaybeT IO [Hash]
+seedChainData :: MaybeT IO PutItemResponse
 seedChainData = do
     entries <- liftIO $ scanTable NorthVirginia "StateData" "attribute_exists(TreeData)"
+    cidList <- (MaybeT . return ) $ traverse (\x -> x ! "ContractID" ^. avS) (entries ^. srsItems)
     entriesList <- (MaybeT . return ) $ traverse (\x -> x ! "TreeData" ^. avB) (entries ^. srsItems)
-    trees <- (MaybeT . return ) $ traverse (decode . fromStrict) entriesList :: MaybeT IO [PatriciaTree Char Char]
-    (MaybeT . return ) $ traverse getRoot trees
+    roots <- (MaybeT . return ) $ traverse
+        (getRoot . (decode . fromStrict :: ByteString -> PatriciaTree Char Char)) entriesList
+    let cidHashTree = foldr (\x ->  flip ( `insertPatriciaTree` fst x) (snd x)) singleton $ zip (Data.Text.unpack <$> cidList) (show <$> roots)
+    let encCHTree = toStrict $ encode cidHashTree
+    chTreeRoot <- (MaybeT . return ) $ getRoot cidHashTree
+    let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show chTreeRoot)) $ insert "TreeData" (attributeValue & avB .~ Just encCHTree) Map.empty
+    liftIO $ insertItem NorthVirginia "ChainData" seedTree
+
+    -- (MaybeT . return ) $ traverse getRoot trees
     -- return $ foldr (\x -> flip ( `insertPatriciaTree` fst x) (snd x)) singleton entriesList
+
 seedStateData :: MaybeT IO PutItemResponse
 seedStateData =  do
     entries <- liftIO $ scanTable NorthVirginia "Music" "attribute_exists(Address)"
     entriesList <-  (MaybeT . return ) $ listify (entries ^. srsItems)
-    let pTree = foldr (\x -> flip ( `insertPatriciaTree` fst x) (snd x)) singleton entriesList
-    let encodedTree = toStrict $ encode pTree
-    root <- (MaybeT . return ) $ getRoot pTree
-    let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show root)) $ insert "TreeData" (attributeValue & avB .~ Just encodedTree) Map.empty
+    let addrHashTree = foldr (\x -> flip ( `insertPatriciaTree` fst x) (snd x)) singleton entriesList
+    let encodedTree = toStrict $ encode addrHashTree
+    root <- (MaybeT . return ) $ getRoot addrHashTree
+    let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show root)) $ insert "ContractID" (attributeValue & avS .~ Just "Music") $ insert "TreeData" (attributeValue & avB .~ Just encodedTree) Map.empty
     liftIO $ insertItem NorthVirginia "StateData" seedTree
 
 listify :: [HashMap Text AttributeValue]  -> Maybe [(String,String)]
