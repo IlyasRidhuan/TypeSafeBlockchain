@@ -24,6 +24,7 @@ import           Network.AWS.DynamoDB
 import Control.Lens
 import GHC.Generics
 import Data.Ord (comparing)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.ByteArray (convert)
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy (toStrict,fromStrict)
@@ -90,13 +91,48 @@ decodeMessage res = do
     -- maybe (deleteMessageResponse) (delMessage NorthVirginia "url here") (head receiptHandle)
     return $ zipWith5 (\a b c d e -> Tx a (AccountAddress b) (TxReceipt c) d e ) validHashes validAddrs receiptHandle cids op
 
--- getCIDTree :: (Binary k, Binary v) => Hash -> Tx -> MaybeT IO (PatriciaTree Text Hash)
--- getCIDTree hash Tx {..} = do
---     let treeRoot = Map.singleton "Hash" (attributeValue & avS .~ (Just $ Data.Text.pack $ show hash))
---     res <- liftIO $ getEntry NorthVirginia "MusicStateDB" treeRoot
---     serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "Content") ^. avB
---     return $ decode $ fromStrict serialBinaryTree
---
+consumeMessage :: ReceiveMessageResponse -> MaybeT IO (PatriciaTree Char Char)
+consumeMessage res = do
+    tx <- (MaybeT . return) $ decodeMessage res >>= return . head
+    chainTree <- liftIO $ runMaybeT (getChainTip >>= getBlockchainTree)
+    (subTree, merkleProof) <- (MaybeT . return) $ chainTree >>= return . flip (,) [] >>= return . flip getTree (Data.Text.unpack (contractID tx))
+    hash <- (MaybeT . return) $ getValue subTree >>= (digestFromByteString . fst . B16.decode . B8.pack) :: MaybeT IO Hash
+    oldState <- getStateTree hash
+    newState <- (MaybeT . return) $ reHashTree $ insertPatriciaTree oldState (B8.unpack $ unAA $ address tx) (show $ itemHash tx)
+    newStateRoot <- getRoot newState
+    liftIO $ insertStateTree newStateRoot (contractID tx) newState
+    let newChainTree = reHashTree $ update (\_ -> newRoot) (contractID tx) chainTree
+    newChainRoot <- getRoot newChainTree
+    liftIO $ insertChainTree newChainRoot newChainTree
+
+    -- let bead = Bead  FINISH MAKING BEAD
+    return $ undefined
+
+insertChainTree :: Hash -> PatriciaTree k v -> IO PutItemResponse
+insertChainTree hash tree = do
+    let textHash = Data.Text.pack $ show hash
+    let bytetree = toStrict $ encode tree
+    let newEntry = insert "Hash" (attributeValue & avS .~ Just textHash) $ insert "TreeData" (attributeValue & avB .~ Just bytetree) Map.empty
+    insertItem NorthVirginia "ChainData" newEntry
+
+insertStateTree :: Hash -> Text -> PatriciaTree k v -> IO PutItemResponse
+insertStateTree hash cid tree = do
+    let textHash = Data.Text.pack $ show hash
+    let bytetree = toStrict $ encode tree
+    let newEntry = insert "Hash" (attributeValue & avS .~ Just textHash) $ insert "TreeData" (attributeValue & avS .~ Just cid) $ insert "TreeData" (attributeValue & avB .~ Just bytetree) Map.empty
+    insertItem NorthVirginia "StateData" newEntry
+
+-- Returns a Patricia Tree ADDRESS HASH of the expanded merkle root in the chainData
+-- use this patricia tree
+getStateTree :: Hash -> MaybeT IO (PatriciaTree Char Char)
+getStateTree hash = do
+    let treeRoot = Map.singleton "Hash" (attributeValue & avS .~ (Just $ Data.Text.pack $ show hash))
+    res <- liftIO $ getEntry NorthVirginia "StateData" treeRoot
+    serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "TreeData") ^. avB
+    return $ decode $ fromStrict serialBinaryTree
+
+-- Returns a Patricia Tree CID HASH of the expanded merkle root in the blockchain
+-- use this Patricia Tree and the CID to find an instance of the state tree for that CID
 getBlockchainTree:: Bead -> MaybeT IO (PatriciaTree Char Char)
 getBlockchainTree Bead {..} = do
     let treeRoot = Map.singleton "Hash" (attributeValue & avS .~ (Just $ Data.Text.pack $ show patriciaRoot))
@@ -128,7 +164,7 @@ seedChainData = do
     roots <- (MaybeT . return ) $ traverse
         (getRoot . (decode . fromStrict :: ByteString -> PatriciaTree Char Char)) entriesList
     let cidHashTree = foldr (\x ->  flip ( `insertPatriciaTree` fst x) (snd x)) singleton $ zip (Data.Text.unpack <$> cidList) (show <$> roots)
-    let encCHTree = toStrict $ encode cidHashTree
+    let encCHTree = toStrict $ (encode . reHashTree) cidHashTree
     chTreeRoot <- (MaybeT . return ) $ getRoot cidHashTree
     let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show chTreeRoot)) $ insert "TreeData" (attributeValue & avB .~ Just encCHTree) Map.empty
     liftIO $ insertItem NorthVirginia "ChainData" seedTree
@@ -141,7 +177,7 @@ seedStateData =  do
     entries <- liftIO $ scanTable NorthVirginia "Music" "attribute_exists(Address)"
     entriesList <-  (MaybeT . return ) $ listify (entries ^. srsItems)
     let addrHashTree = foldr (\x -> flip ( `insertPatriciaTree` fst x) (snd x)) singleton entriesList
-    let encodedTree = toStrict $ encode addrHashTree
+    let encodedTree = toStrict $ (encode . reHashTree) addrHashTree
     root <- (MaybeT . return ) $ getRoot addrHashTree
     let seedTree = insert "Hash" (attributeValue & avS .~ Just (Data.Text.pack $ show root)) $ insert "ContractID" (attributeValue & avS .~ Just "Music") $ insert "TreeData" (attributeValue & avB .~ Just encodedTree) Map.empty
     liftIO $ insertItem NorthVirginia "StateData" seedTree
