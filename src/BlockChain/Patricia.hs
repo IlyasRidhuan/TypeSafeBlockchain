@@ -94,15 +94,19 @@ getRoot :: PatriciaTree k v -> Maybe Hash
 getRoot (Root h _) = Just h
 getRoot _          = Nothing
 
-getValue :: (Eq k, Eq v) => (PatriciaTree k v, [Hash]) -> [k] -> (PatriciaTree k v, [Hash])
-getValue node [] = node
-getValue (Root h trees,bs) key = case prefixMap trees key of
-    [(pt, Just (FullPrefix s))] -> getValue (pt,h:bs) $ drop (length s) key
-    [(pt, Just (PartialPrefix s))] -> getValue (pt,h:bs) $ drop (length s) key
+getValue :: (Eq k, Eq v) => PatriciaTree k v -> Maybe [v]
+getValue (Node _ (Value x) _ ) = Just x
+getValue _                = Nothing
+
+getTree :: (Eq k, Eq v) => (PatriciaTree k v, [Hash]) -> [k] -> (PatriciaTree k v, [Hash])
+getTree node [] = node
+getTree (Root h trees,bs) key = case prefixMap trees key of
+    [(pt, Just (FullPrefix s))] -> getTree (pt,h:bs) $ drop (length s) key
+    [(pt, Just (PartialPrefix s))] -> getTree (pt,h:bs) $ drop (length s) key
     _                       -> (Empty, [])
-getValue (Node (Key n) (Ptr k) trees,bs) key = case prefixMap trees key of
-    [(pt, Just (FullPrefix s))] -> getValue (pt,k:bs) $ drop (length s) key
-    [(pt, Just (PartialPrefix s))] -> getValue (pt,k:bs) $ drop (length s) key
+getTree (Node (Key n) (Ptr k) trees,bs) key = case prefixMap trees key of
+    [(pt, Just (FullPrefix s))] -> getTree (pt,k:bs) $ drop (length s) key
+    [(pt, Just (PartialPrefix s))] -> getTree (pt,k:bs) $ drop (length s) key
     _                       -> (Empty, [])
 
 update :: (Eq k, Eq v) => ([v] -> [v]) -> [k] -> PatriciaTree k v -> PatriciaTree k v
@@ -137,6 +141,7 @@ slowPrefix (x:xs) (y:ys)
 
 
 findPrefix :: (Eq k, Eq v) => PatriciaTree k v -> [k] -> Maybe (Prefix k)
+findPrefix Empty _ = Nothing
 findPrefix (Node (Key n) _ _) str
     | pfx == n = Just $ FullPrefix pfx
     | null pfx = Nothing
