@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     
+  exposed-modules:
   build-depends:       base >= 4.7 && < 5
                     ,  text
                     ,  conduit
@@ -26,6 +26,7 @@ library
                     ,  memory
                     ,  transformers
                     ,  mtl
+                    ,  time
                     ,  base16-bytestring
                     ,  free
                     ,  containers
