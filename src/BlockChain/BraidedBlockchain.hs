@@ -7,6 +7,7 @@
 module Blockchain.BraidedBlockchain where
 
 import Crypto.Hash
+import Crypto.Number.Generate
 import Data.List (zipWith5,maximumBy)
 import Blockchain.GenAddress
 import Blockchain.Patricia
@@ -16,6 +17,7 @@ import Control.Monad.Trans
 import qualified Data.ByteString.Char8 as B8
 import qualified Data.ByteString.Base16 as B16
 import Data.Binary (Binary, encode,decode)
+import Data.Monoid
 import AWS.SQSHandler
 import AWS.DynamoDBHandler
 import Network.AWS.SQS
@@ -41,7 +43,6 @@ data Tx = Tx {
     contractID :: Text,
     operation :: Text
 } deriving (Show, Generic)
-
 
 newtype TxReceipt = TxReceipt {unRec :: Text} deriving (Show)
 
@@ -91,35 +92,68 @@ decodeMessage res = do
     -- maybe (deleteMessageResponse) (delMessage NorthVirginia "url here") (head receiptHandle)
     return $ zipWith5 (\a b c d e -> Tx a (AccountAddress b) (TxReceipt c) d e ) validHashes validAddrs receiptHandle cids op
 
-consumeMessage :: ReceiveMessageResponse -> MaybeT IO (PatriciaTree Char Char)
+consumeMessage :: ReceiveMessageResponse -> MaybeT IO PutItemResponse
 consumeMessage res = do
+    -- Read messsage off queue and decode into a transaction
     tx <- (MaybeT . return) $ decodeMessage res >>= return . head
-    chainTree <- liftIO $ runMaybeT (getChainTip >>= getBlockchainTree)
+    -- Get the block at the tip of the blockchain
+    tipBlock <- liftIO $ runMaybeT getChainTip
+    -- Find the hash of this block to be used as the parent in the new block
+    parentHash <- (MaybeT . return) $ hashBlock <$> (snd <$> tipBlock)
+    -- get the tree associated with the merkle root in the blockchain
+    chainTree <- liftIO $ runMaybeT ((MaybeT . return) (snd <$> tipBlock) >>= getBlockchainTree)
+    -- look for the tree that is associated with the CID of the tx
     (subTree, merkleProof) <- (MaybeT . return) $ chainTree >>= return . flip (,) [] >>= return . flip getTree (Data.Text.unpack (contractID tx))
+    -- get its value which is the root of the tree in the statesDB
+    liftIO  $ print "Hash is not fine"
     hash <- (MaybeT . return) $ getValue subTree >>= (digestFromByteString . fst . B16.decode . B8.pack) :: MaybeT IO Hash
+    liftIO  $ print "Hash is fine"
+    -- get the previous latest state of a contract
     oldState <- getStateTree hash
-    newState <- (MaybeT . return) $ reHashTree $ insertPatriciaTree oldState (B8.unpack $ unAA $ address tx) (show $ itemHash tx)
-    newStateRoot <- getRoot newState
+    -- update this tree and rehash it to form the new stateTree
+    let newState = reHashTree $ insertPatriciaTree oldState (B8.unpack $ unAA $ address tx) (show $ itemHash tx)
+    -- get it's root for the chainData
+    newStateRoot <- (MaybeT . return) $ getRoot newState
+    -- insert the new state into the stateData
     liftIO $ insertStateTree newStateRoot (contractID tx) newState
-    let newChainTree = reHashTree $ update (\_ -> newRoot) (contractID tx) chainTree
-    newChainRoot <- getRoot newChainTree
+
+    newChainTree <- (MaybeT . return) $ chainTree >>= return . update (\_ -> show newStateRoot) (Data.Text.unpack $ contractID tx) >>= return . reHashTree
+    newChainRoot <- (MaybeT . return) $ getRoot newChainTree
     liftIO $ insertChainTree newChainRoot newChainTree
 
-    -- let bead = Bead  FINISH MAKING BEAD
-    return $ undefined
+    nonce <- liftIO findNonce
+    timestamp <- liftIO $ floor <$> getPOSIXTime
+    nonce <- liftIO findNonce
+    let bead = Bead nonce timestamp newChainRoot [parentHash]
+    num <- (MaybeT . return) $ fst <$> tipBlock
+    liftIO $ insertBlockChain bead num
 
-insertChainTree :: Hash -> PatriciaTree k v -> IO PutItemResponse
+hashBlock :: Bead -> Hash
+hashBlock Bead {..} = hash $ B8.pack (show nonce) <> B8.pack (show timestamp) <> convert patriciaRoot <> foldr (\x -> (<>) (convert x :: ByteString)) "" parents
+
+findNonce :: IO Integer
+findNonce = generateParams 256 Nothing False
+
+insertBlockChain :: Bead -> Text -> IO PutItemResponse
+insertBlockChain bead blocNum = do
+    let encodedBlock = toStrict $ encode bead
+    let nxtNum = Data.Text.pack . show . (+1) $ (read (Data.Text.unpack blocNum) :: Integer)
+    let newBlock = insert "BlockNumber" (attributeValue & avS .~ Just nxtNum) $ insert "BlockData" (attributeValue & avB .~ Just encodedBlock) Map.empty
+    insertItem NorthVirginia "BlockChain" newBlock
+
+
+insertChainTree :: (Binary k , Binary v) => Hash -> PatriciaTree k v -> IO PutItemResponse
 insertChainTree hash tree = do
     let textHash = Data.Text.pack $ show hash
     let bytetree = toStrict $ encode tree
     let newEntry = insert "Hash" (attributeValue & avS .~ Just textHash) $ insert "TreeData" (attributeValue & avB .~ Just bytetree) Map.empty
     insertItem NorthVirginia "ChainData" newEntry
 
-insertStateTree :: Hash -> Text -> PatriciaTree k v -> IO PutItemResponse
+insertStateTree :: (Binary k , Binary v) => Hash -> Text -> PatriciaTree k v -> IO PutItemResponse
 insertStateTree hash cid tree = do
     let textHash = Data.Text.pack $ show hash
     let bytetree = toStrict $ encode tree
-    let newEntry = insert "Hash" (attributeValue & avS .~ Just textHash) $ insert "TreeData" (attributeValue & avS .~ Just cid) $ insert "TreeData" (attributeValue & avB .~ Just bytetree) Map.empty
+    let newEntry = insert "Hash" (attributeValue & avS .~ Just textHash) $ insert "ContractID" (attributeValue & avS .~ Just cid) $ insert "TreeData" (attributeValue & avB .~ Just bytetree) Map.empty
     insertItem NorthVirginia "StateData" newEntry
 
 -- Returns a Patricia Tree ADDRESS HASH of the expanded merkle root in the chainData
@@ -140,14 +174,14 @@ getBlockchainTree Bead {..} = do
     serialBinaryTree <- (MaybeT . return) $ ((res ^. girsItem) ! "TreeData") ^. avB
     return $ decode $ fromStrict serialBinaryTree
 
-getChainTip :: MaybeT IO Bead
+getChainTip :: MaybeT IO (Text, Bead)
 getChainTip = do
     blocks <- liftIO $ scanTable NorthVirginia "BlockChain" "attribute_exists(BlockData)"
     blockNumber <- (MaybeT . return ) $ traverse (\x -> x ! "BlockNumber" ^. avS) (blocks ^. srsItems)
     blockData <- (MaybeT . return ) $ traverse (\x -> x ! "BlockData" ^. avB) (blocks ^. srsItems)
     let listedVersion = zip blockNumber blockData
     let (num,tipData) = maximumBy (comparing fst) listedVersion
-    return $ decode $ fromStrict tipData
+    return (num, decode $ fromStrict tipData)
 
 
 seedBlockchain :: IO PutItemResponse
