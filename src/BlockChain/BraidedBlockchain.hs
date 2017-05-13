@@ -1,47 +1,47 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE DeriveGeneric     #-}
+{-# LANGUAGE GADTs             #-}
+{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE RecordWildCards   #-}
 
 module Blockchain.BraidedBlockchain where
 
-import Crypto.Hash
-import Crypto.Number.Generate
-import Data.List (zipWith5,maximumBy)
-import Blockchain.GenAddress
-import Blockchain.Patricia
-import Control.Monad
-import Control.Applicative
-import Control.Monad.Trans
-import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Base16 as B16
-import Data.Binary (Binary, encode,decode)
-import Data.Monoid
-import AWS.SQSHandler
-import AWS.DynamoDBHandler
-import Network.AWS.SQS
-import Control.Monad.Trans.Maybe
+import           AWS.DynamoDBHandler
+import           AWS.SQSHandler
+import           Blockchain.GenAddress
+import           Blockchain.Patricia
+import           Control.Applicative
+import           Control.Lens
+import           Control.Monad
+import           Control.Monad.Trans
+import           Control.Monad.Trans.Maybe
+import           Crypto.Hash
+import           Crypto.Number.Generate
+import           Data.Binary               (Binary, decode, encode)
+import           Data.ByteArray            (convert)
+import           Data.ByteString           (ByteString)
+import qualified Data.ByteString.Base16    as B16
+import qualified Data.ByteString.Char8     as B8
+import           Data.ByteString.Lazy      (fromStrict, toStrict)
+import           Data.HashMap.Strict       (HashMap, insert, lookup, (!))
+import qualified Data.HashMap.Strict       as Map
+import           Data.List                 (maximumBy, zipWith5)
+import           Data.Monoid
+import           Data.Ord                  (comparing)
+import           Data.Text                 (Text, pack, unpack)
+import qualified Data.Text.IO              as Text
+import           Data.Time.Clock.POSIX     (getPOSIXTime)
+import           GHC.Generics
 import           Network.AWS.DynamoDB
-import Control.Lens
-import GHC.Generics
-import Data.Ord (comparing)
-import Data.Time.Clock.POSIX (getPOSIXTime)
-import Data.ByteArray (convert)
-import Data.ByteString (ByteString)
-import Data.ByteString.Lazy (toStrict,fromStrict)
-import           Data.HashMap.Strict     (HashMap,insert, (!),lookup)
-import qualified Data.HashMap.Strict     as Map
-import           Data.Text               (Text,unpack,pack)
-import qualified Data.Text.IO            as Text
-import Network.AWS.Types
+import           Network.AWS.SQS
+import           Network.AWS.Types
 
 data Tx = Tx {
-    itemHash :: Hash,
-    address :: AccountAddress,
-    receipt :: TxReceipt,
+    itemHash   :: Hash,
+    address    :: AccountAddress,
+    receipt    :: TxReceipt,
     contractID :: Text,
-    operation :: Text
+    operation  :: Text
 } deriving (Show, Generic)
 
 newtype TxReceipt = TxReceipt {unRec :: Text} deriving (Show)
@@ -49,10 +49,10 @@ newtype TxReceipt = TxReceipt {unRec :: Text} deriving (Show)
 type Mempool = [Tx]
 
 data Bead = Bead {
-    nonce :: Integer,
-    timestamp :: Integer,
+    nonce        :: Integer,
+    timestamp    :: Integer,
     patriciaRoot :: Hash,
-    parents :: [Hash]
+    parents      :: [Hash]
 } deriving (Show,Generic)
 
 instance Binary Bead
@@ -71,12 +71,6 @@ genesisParent = [hash ("No Parent" :: ByteString)]
 sampleNAddress :: Integer -> IO [AccountAddress]
 sampleNAddress n = mapM (const genKey) [1..n]
 
--- sampleMempool :: Integer -> IO Mempool
--- sampleMempool n = do
---     aa <- sampleNAddress n
---     let hsh = hash <$> ((B8.pack . show ) <$> [1..n]) :: [Hash]
---     return $ zipWith (\itemHash address -> Tx {itemHash, address}) hsh aa
-
 decodeMessage :: ReceiveMessageResponse -> Maybe [Tx]
 decodeMessage res = do
     let messages = res ^. rmrsMessages
@@ -92,7 +86,7 @@ decodeMessage res = do
     -- maybe (deleteMessageResponse) (delMessage NorthVirginia "url here") (head receiptHandle)
     return $ zipWith5 (\a b c d e -> Tx a (AccountAddress b) (TxReceipt c) d e ) validHashes validAddrs receiptHandle cids op
 
-consumeMessage :: ReceiveMessageResponse -> MaybeT IO PutItemResponse
+consumeMessage :: ReceiveMessageResponse -> MaybeT IO DeleteMessageResponse
 consumeMessage res = do
     -- Read messsage off queue and decode into a transaction
     tx <- (MaybeT . return) $ decodeMessage res >>= return . head
@@ -127,6 +121,7 @@ consumeMessage res = do
     let bead = Bead nonce timestamp newChainRoot [parentHash]
     num <- (MaybeT . return) $ fst <$> tipBlock
     liftIO $ insertBlockChain bead num
+    liftIO $ delMessage NorthVirginia "https://sqs.us-east-1.amazonaws.com/804148272031/EscrowQ" (unRec $  receipt tx)
 
 hashBlock :: Bead -> Hash
 hashBlock Bead {..} = hash $ B8.pack (show nonce) <> B8.pack (show timestamp) <> convert patriciaRoot <> foldr (\x -> (<>) (convert x :: ByteString)) "" parents
