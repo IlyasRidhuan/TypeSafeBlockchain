@@ -25,7 +25,8 @@ import qualified Data.ByteString.Char8     as B8
 import           Data.ByteString.Lazy      (fromStrict, toStrict)
 import           Data.HashMap.Strict       (HashMap, insert, lookup, (!))
 import qualified Data.HashMap.Strict       as Map
-import           Data.List                 (maximumBy, zipWith5)
+import           Data.List                 (maximumBy, zipWith5,groupBy)
+import           Data.Function             (on)
 import           Data.Monoid
 import           Data.Ord                  (comparing)
 import           Data.Text                 (Text, pack, unpack)
@@ -71,6 +72,9 @@ genesisParent = [hash ("No Parent" :: ByteString)]
 sampleNAddress :: Integer -> IO [AccountAddress]
 sampleNAddress n = mapM (const genKey) [1..n]
 
+sampleTxList :: Int  -> [Tx]
+sampleTxList n =  Tx { itemHash=genesisHash, address=(AccountAddress "addr") ,receipt=(TxReceipt "receipt") ,contractID="newContractID" , operation="INSERT"} : (replicate n $ Tx { itemHash=genesisHash, address=(AccountAddress "addr") ,receipt=(TxReceipt "receipt") ,contractID="contractId" , operation="INSERT"})
+
 decodeMessage :: ReceiveMessageResponse -> Maybe [Tx]
 decodeMessage res = do
     let messages = res ^. rmrsMessages
@@ -86,12 +90,16 @@ decodeMessage res = do
     -- maybe (deleteMessageResponse) (delMessage NorthVirginia "url here") (head receiptHandle)
     return $ zipWith5 (\a b c d e -> Tx a (AccountAddress b) (TxReceipt c) d e ) validHashes validAddrs receiptHandle cids op
 
+groupingTx :: [Tx] -> [(Text,[Tx])]
+groupingTx txs = (\x -> ((contractID . head) x,x)) <$> groupBy ((==) `on` contractID) txs
+
+
 consumeMessage :: ReceiveMessageResponse -> MaybeT IO DeleteMessageResponse
 consumeMessage res = do
     -- Read messsage off queue and decode into a transaction
     tx <- (MaybeT . return) $ decodeMessage res >>= return . head
     -- Get the block at the tip of the blockchain
-    tipBlock <- liftIO $ runMaybeT getChainTip
+    (txt,tipBlock) <- liftIO $ runMaybeT getChainTip
     -- Find the hash of this block to be used as the parent in the new block
     parentHash <- (MaybeT . return) $ hashBlock <$> (snd <$> tipBlock)
     -- get the tree associated with the merkle root in the blockchain
