@@ -99,7 +99,7 @@ consumeMessage res = do
     -- Read messsage off queue and decode into a transaction
     tx <- (MaybeT . return) $ decodeMessage res >>= return . head
     -- Get the block at the tip of the blockchain
-    (txt,tipBlock) <- liftIO $ runMaybeT getChainTip
+    tipBlock <- liftIO $ runMaybeT getChainTip
     -- Find the hash of this block to be used as the parent in the new block
     parentHash <- (MaybeT . return) $ hashBlock <$> (snd <$> tipBlock)
     -- get the tree associated with the merkle root in the blockchain
