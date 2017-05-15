@@ -11,7 +11,7 @@ import Crypto.Hash
 import Data.Monoid
 import qualified Data.ByteString.Char8 as B8
 
-newtype AccountAddress = AccountAddress {unAA :: B8.ByteString} deriving (Show)
+newtype AccountAddress = AccountAddress {unAA :: B8.ByteString} deriving (Show,Eq)
 
 genKey :: IO AccountAddress
 genKey = do
