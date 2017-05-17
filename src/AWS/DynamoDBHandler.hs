@@ -18,6 +18,8 @@ import           Network.AWS.Data
 import           Network.AWS.DynamoDB
 import           Network.AWS.Auth
 import           System.IO
+import           Network.AWS.Data.List1
+import qualified Data.List.NonEmpty   as NonEmpty
 
 printTables :: Region -> IO ()
 printTables region = do
@@ -41,6 +43,20 @@ insertItem region table item = do
            <> "' with attribute names: "
            <> Text.intercalate ", " (Map.keys item)
         send $ putItem table & piItem .~ item
+
+batchInsert :: Region -> [Text] -> [HashMap Text AttributeValue] -> IO BatchWriteItemResponse
+batchInsert region tables items = do
+    lgr <- newLogger Debug stdout
+    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    let putItems = (\x -> putRequest & prItem .~ x) <$> items
+    let wReq     = (\x -> [writeRequest  & wrPutRequest .~ Just x]) <$> putItems
+    let batchReqItem = foldr ( uncurry Map.insert) Map.empty $ zip tables (NonEmpty.fromList <$> wReq)
+
+
+    runResourceT . runAWST env . within region $ do
+        say $ "Batch inserting"
+        send $ batchWriteItem & bwiRequestItems .~ batchReqItem
+
 
 getEntry :: Region -> Text -> HashMap Text AttributeValue -> IO GetItemResponse
 getEntry region table item = do
