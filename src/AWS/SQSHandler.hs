@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 module AWS.SQSHandler where
 
-import           Data.Text               (Text)
+import           Data.Text               (Text,pack)
 import qualified Data.Text.IO            as Text
 
 import           System.IO
@@ -31,6 +31,15 @@ delMessage region qUrl receiptHandle = do
         say $ "Deleting Message from queue: " <> qUrl
         send $ deleteMessage qUrl receiptHandle
 
+batchDelMessage :: Region -> Text -> [Text] -> IO DeleteMessageBatchResponse
+batchDelMessage region qUrl receiptHandles = do
+    lgr <- newLogger Debug stdout
+    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    let pid = (Data.Text.pack . show ) <$> [1..length receiptHandles]
+    let deleteHandles = uncurry deleteMessageBatchRequestEntry <$> zip receiptHandles pid
+    runResourceT . runAWST env . within region $ do
+        say $ "Batching delete message from queue: " <> qUrl
+        send $ deleteMessageBatch qUrl & dmbEntries .~ deleteHandles
 
 sndMessage :: Region -> Text -> [Text] -> IO [SendMessageResponse]
 sndMessage region qUrl xs = do
