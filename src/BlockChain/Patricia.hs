@@ -2,12 +2,14 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
+
 module Blockchain.Patricia where
 
 import Prelude hiding (lookup)
 import Data.Maybe
 import Control.Monad
 import Data.List (sort)
+import Control.Applicative
 import Data.Monoid
 import Crypto.Hash
 import Data.String
@@ -97,6 +99,10 @@ getRoot _          = Nothing
 getValue :: (Eq k, Eq v) => PatriciaTree k v -> Maybe [v]
 getValue (Node _ (Value x) _ ) = Just x
 getValue _                = Nothing
+
+
+getItem :: (Eq k, Eq v) => PatriciaTree k v -> [k] -> Maybe [v]
+getItem node key = getValue . fst $ getTree (node,[]) key
 
 getTree :: (Eq k, Eq v) => (PatriciaTree k v, [Hash]) -> [k] -> (PatriciaTree k v, [Hash])
 getTree node [] = node
