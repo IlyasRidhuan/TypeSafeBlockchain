@@ -23,17 +23,18 @@ import           Data.ByteString           (ByteString)
 import qualified Data.ByteString.Base16    as B16
 import qualified Data.ByteString.Char8     as B8
 import           Data.ByteString.Lazy      (fromStrict, toStrict)
+import           Data.Function             (on)
 import           Data.HashMap.Strict       (HashMap, insert, lookup, (!))
 import qualified Data.HashMap.Strict       as Map
-import           Data.List                 (maximumBy, zipWith5,groupBy)
-import           Data.Function             (on)
+import           Data.List                 (groupBy, maximumBy, zipWith5)
+import           Data.Maybe
 import           Data.Monoid
 import           Data.Ord                  (comparing)
 import           Data.Text                 (Text, pack, unpack)
 import qualified Data.Text.IO              as Text
 import           Data.Time.Clock.POSIX     (getPOSIXTime)
 import           GHC.Generics
-import           Network.AWS.DynamoDB
+import           Network.AWS.DynamoDB      hiding (getItem)
 import           Network.AWS.SQS
 import           Network.AWS.Types
 
@@ -93,6 +94,57 @@ decodeMessage res = do
 groupingTx :: [Tx] -> [(Text,[Tx])]
 groupingTx txs = (\x -> ((contractID . head) x,x)) <$> groupBy ((==) `on` contractID) txs
 
+processMessage :: ReceiveMessageResponse -> MaybeT IO Bead
+processMessage res = do
+    txs <- (MaybeT . return) $ decodeMessage res
+    let cidGroupedTx = groupingTx txs
+    (blockNum, tipBlock) <- getChainTip
+    let parentHash = hashBlock tipBlock
+    chainTree <- getBlockchainTree tipBlock
+    let charGroupedTx = filterMaybes $ (\x -> (getItem chainTree (Data.Text.unpack $ fst x) >>= charToHash, snd x)) <$> cidGroupedTx
+    patriciaTrees <- traverse (getStateTree . fst) charGroupedTx
+    let patriciaGroupedTx = zip patriciaTrees (snd <$> charGroupedTx)
+    let cidGroupedTree = (\x -> ( (contractID . head . snd) x, uncurry (foldl applyTx) x )) <$> patriciaGroupedTx
+    treeRoots <- (MaybeT . return) $ traverse (getRoot . snd) cidGroupedTree
+    let cidGroupedRoots = zip (fst <$> cidGroupedTree) treeRoots
+
+    let updatedChainTree = foldr (uncurry applyHash) chainTree cidGroupedRoots
+
+    newChainTreeRoot <- (MaybeT . return) $ getRoot updatedChainTree
+    timestamp <- liftIO $ floor <$> getPOSIXTime
+    nonce <- liftIO findNonce
+    let bead = Bead nonce timestamp newChainTreeRoot [parentHash]
+
+    return undefined
+
+filterMaybes :: [(Maybe a,[b])] -> [(a, [b])]
+filterMaybes (x:xs) = case x of
+    (Just t, txs) -> (t,txs): filterMaybes xs
+    (Nothing,_)   -> filterMaybes xs
+
+
+charToHash :: String -> Maybe Hash
+charToHash = digestFromByteString . fst . B16.decode . B8.pack
+
+applyHash :: Text -> Hash -> PatriciaTree Char Char -> PatriciaTree Char Char
+applyHash key hash tree = case getItem tree cid of
+    Nothing -> runInsert
+    _       -> runUpdate
+    where
+        cid = Data.Text.unpack key
+        charHash = show hash
+        runUpdate = update (const charHash) cid tree
+        runInsert = insertPatriciaTree tree cid charHash
+
+applyTx :: PatriciaTree Char Char -> Tx -> PatriciaTree Char Char
+applyTx tree Tx{..} = case getItem tree addr of
+    Nothing -> runInsert
+    _       -> runUpdate
+    where
+        addr = B8.unpack $ unAA address
+        hash = show itemHash
+        runUpdate = update (const hash) addr tree
+        runInsert = insertPatriciaTree tree addr hash
 
 consumeMessage :: ReceiveMessageResponse -> MaybeT IO DeleteMessageResponse
 consumeMessage res = do
