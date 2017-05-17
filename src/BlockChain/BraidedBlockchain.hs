@@ -37,6 +37,7 @@ import           GHC.Generics
 import           Network.AWS.DynamoDB      hiding (getItem)
 import           Network.AWS.SQS
 import           Network.AWS.Types
+import           Control.Arrow
 
 data Tx = Tx {
     itemHash   :: Hash,
@@ -96,26 +97,43 @@ groupingTx txs = (\x -> ((contractID . head) x,x)) <$> groupBy ((==) `on` contra
 
 processMessage :: ReceiveMessageResponse -> MaybeT IO Bead
 processMessage res = do
-    txs <- (MaybeT . return) $ decodeMessage res
-    let cidGroupedTx = groupingTx txs
+    txs        <- (MaybeT . return) $ decodeMessage res
+    let txTree = reHashTree $ foldr txToTree singleton txs
+    let cid_tx = groupingTx txs
+
     (blockNum, tipBlock) <- getChainTip
-    let parentHash = hashBlock tipBlock
-    chainTree <- getBlockchainTree tipBlock
-    let charGroupedTx = filterMaybes $ (\x -> (getItem chainTree (Data.Text.unpack $ fst x) >>= charToHash, snd x)) <$> cidGroupedTx
-    patriciaTrees <- traverse (getStateTree . fst) charGroupedTx
-    let patriciaGroupedTx = zip patriciaTrees (snd <$> charGroupedTx)
-    let cidGroupedTree = (\x -> ( (contractID . head . snd) x, uncurry (foldl applyTx) x )) <$> patriciaGroupedTx
-    treeRoots <- (MaybeT . return) $ traverse (getRoot . snd) cidGroupedTree
-    let cidGroupedRoots = zip (fst <$> cidGroupedTree) treeRoots
+    let parentHash       = hashBlock tipBlock
+    chainTree            <- getBlockchainTree tipBlock
 
-    let updatedChainTree = foldr (uncurry applyHash) chainTree cidGroupedRoots
+    let hash_tx         = filterMaybes $ (\x -> (getItem chainTree (Data.Text.unpack $ fst x) >>= charToHash, snd x)) <$> cid_tx
+    patriciaTrees       <- traverse (getStateTree . fst) hash_tx
 
-    newChainTreeRoot <- (MaybeT . return) $ getRoot updatedChainTree
-    timestamp <- liftIO $ floor <$> getPOSIXTime
-    nonce <- liftIO findNonce
-    let bead = Bead nonce timestamp newChainTreeRoot [parentHash]
+    -- [(PatriciaTree a a, [Tx])]
+    let patricia_tx     = zip patriciaTrees (snd <$> hash_tx)
+    -- [(Cid,PatriciaTree a a)]
+    let cid_patricia   = ((contractID . head . snd) &&& (reHashTree . uncurry (foldl applyTx))) <$> patricia_tx
+    -- [Hash]
+    treeRoots           <- (MaybeT . return) $ traverse (getRoot . snd) cid_patricia
+
+
+    let cid_root        = zip (fst <$> cid_patricia) treeRoots
+
+    -- curry insertStateTree x
+
+    let updatedChainTree  = reHashTree $ foldr (uncurry applyHash) chainTree cid_root
+    newChainTreeRoot      <- (MaybeT . return) $ getRoot updatedChainTree
+
+    timestamp     <- liftIO $ floor <$> getPOSIXTime
+    nonce         <- liftIO findNonce
+    let bead      = Bead nonce timestamp newChainTreeRoot [parentHash]
 
     return undefined
+
+txToTree :: Tx -> PatriciaTree Char Char -> PatriciaTree Char Char
+txToTree Tx{..} tree = insertPatriciaTree tree cid hash
+    where
+        cid = Data.Text.unpack contractID
+        hash = show itemHash
 
 filterMaybes :: [(Maybe a,[b])] -> [(a, [b])]
 filterMaybes (x:xs) = case x of
