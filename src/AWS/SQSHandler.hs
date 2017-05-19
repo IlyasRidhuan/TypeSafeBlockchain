@@ -17,7 +17,7 @@ import           Control.Monad.IO.Class
 getMessage :: Region -> Text -> [Text] -> IO ReceiveMessageResponse
 getMessage region qUrl msgAttribNames = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Receiving Message from queue: " <> qUrl
@@ -26,7 +26,8 @@ getMessage region qUrl msgAttribNames = do
 delMessage :: Region -> Text -> Text -> IO DeleteMessageResponse
 delMessage region qUrl receiptHandle = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
+
     runResourceT . runAWST env . within region $ do
         say $ "Deleting Message from queue: " <> qUrl
         send $ deleteMessage qUrl receiptHandle
@@ -34,7 +35,8 @@ delMessage region qUrl receiptHandle = do
 batchDelMessage :: Region -> Text -> [Text] -> IO DeleteMessageBatchResponse
 batchDelMessage region qUrl receiptHandles = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
+
     let pid = (Data.Text.pack . show ) <$> [1..length receiptHandles]
     let deleteHandles = uncurry deleteMessageBatchRequestEntry <$> zip receiptHandles pid
     runResourceT . runAWST env . within region $ do
@@ -44,7 +46,8 @@ batchDelMessage region qUrl receiptHandles = do
 sndMessage :: Region -> Text -> [Text] -> IO [SendMessageResponse]
 sndMessage region qUrl xs = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
+    
     runResourceT . runAWST env . within region $ do
         say $ "Sending message to queue: " <> qUrl
         traverse (send . sendMessage qUrl ) xs
