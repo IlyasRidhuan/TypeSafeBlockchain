@@ -17,7 +17,7 @@ import           Control.Monad.IO.Class
 getMessage :: Region -> Text -> [Text] -> IO ReceiveMessageResponse
 getMessage region qUrl msgAttribNames = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Receiving Message from queue: " <> qUrl
@@ -26,7 +26,7 @@ getMessage region qUrl msgAttribNames = do
 delMessage :: Region -> Text -> Text -> IO DeleteMessageResponse
 delMessage region qUrl receiptHandle = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
     runResourceT . runAWST env . within region $ do
         say $ "Deleting Message from queue: " <> qUrl
         send $ deleteMessage qUrl receiptHandle

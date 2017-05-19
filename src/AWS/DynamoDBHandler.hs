@@ -22,7 +22,7 @@ import           System.IO
 printTables :: Region -> IO ()
 printTables region = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Listing all tables in region " <> toText region
@@ -33,7 +33,7 @@ printTables region = do
 insertItem :: Region -> Text -> HashMap Text AttributeValue -> IO PutItemResponse
 insertItem region table item = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Inserting item into table '"
@@ -45,7 +45,7 @@ insertItem region table item = do
 getEntry :: Region -> Text -> HashMap Text AttributeValue -> IO GetItemResponse
 getEntry region table item = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Retrieving item from table '"
@@ -57,7 +57,7 @@ getEntry region table item = do
 updateEntry :: Region -> Text -> HashMap Text AttributeValue -> Text -> HashMap Text AttributeValue -> IO UpdateItemResponse
 updateEntry region table key expr val = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say "Updating "
@@ -66,7 +66,7 @@ updateEntry region table key expr val = do
 scanTable :: Region -> Text -> Text -> IO ScanResponse
 scanTable region table scanFilter = do
     lgr <- newLogger Debug stdout
-    env <- newEnv $ FromKeys "AKIAJ5Q7GQRONGS6VGEQ" "nXhTOVeS9qsWDQ9MnecXq8qn6EhoMRvYPgVliMxe"
+    env <- newEnv Discover <&> set envLogger lgr
 
     runResourceT . runAWST env . within region $ do
         say $ "Scanning items in table "
